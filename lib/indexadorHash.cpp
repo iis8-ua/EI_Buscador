@@ -35,6 +35,27 @@ IndexadorHash::IndexadorHash(const string& directorioIndexacion)
     RecuperarIndexacion(directorioIndexacion);
 }
 
+IndexadorHash::IndexadorHash()
+    : contadorID(0)
+{
+    ficheroStopWords = "";
+    directorioIndice = "";
+    tipoStemmer = 0;
+    almacenarPosTerm = false;
+    pregunta = "";
+
+    tok = Tokenizador();
+
+    indice.clear();
+    indiceDocs.clear();
+    indicePregunta.clear();
+    stopWords.clear();
+    stopWordsFiltrado.clear();
+
+    informacionColeccionDocs = InfColeccionDocs();
+    infPregunta = InformacionPregunta();
+}
+
 IndexadorHash::IndexadorHash(const IndexadorHash& t)
     : indice(t.indice),
       indiceDocs(t.indiceDocs),

@@ -19,6 +19,8 @@ using namespace std;
 
 class IndexadorHash {
 
+    friend class Buscador;
+
     friend ostream& operator<<(ostream& s, const IndexadorHash& p) {
         s << "Fichero con el listado de palabras de parada: " << p. ficheroStopWords << endl;
         s << "Tokenizador: " << p.tok << endl;

@@ -12,7 +12,9 @@ using namespace std;
 
 typedef time_t Fecha;
 
+
 class InfTermDoc {
+    friend class Buscador;
     friend ostream& operator<<(ostream& s, const InfTermDoc& p);
 public:
     friend class IndexadorHash;
@@ -33,6 +35,7 @@ ostream& operator<<(ostream& s, const InfTermDoc& p);
 
 
 class InformacionTermino {
+    friend class Buscador;
     friend ostream& operator<<(ostream& s, const InformacionTermino& p);
 public:
     friend class IndexadorHash;
@@ -55,6 +58,7 @@ private:
 ostream& operator<<(ostream& s, const InformacionTermino& p);
 
 class InfDoc {
+    friend class Buscador;
     friend ostream& operator<<(ostream& s, const InfDoc& p);
 public:
     friend class IndexadorHash;
@@ -79,6 +83,7 @@ private:
 ostream& operator<<(ostream& s, const InfDoc& p);
 
 class InfColeccionDocs {
+    friend class Buscador;
     friend ostream& operator<<(ostream& s, const InfColeccionDocs& p);
 public:
     friend class IndexadorHash;
@@ -102,6 +107,7 @@ private:
 ostream& operator<<(ostream& s, const InfColeccionDocs& p);
 
 class InformacionTerminoPregunta {
+    friend class Buscador;
     friend ostream& operator<<(ostream& s, const InformacionTerminoPregunta& p);
 public:
     friend class IndexadorHash;
@@ -121,6 +127,7 @@ private:
 ostream& operator<<(ostream& s, const InformacionTerminoPregunta& p);
 
 class InformacionPregunta {
+    friend class Buscador;
     friend ostream& operator<<(ostream& s, const InformacionPregunta& p);
 public:
     friend class IndexadorHash;

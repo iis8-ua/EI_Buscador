@@ -1,4 +1,4 @@
-#include <iostream> 
+#include <iostream>
 #include <string>
 #include "buscador.h"
 #include "indexadorHash.h"
@@ -6,7 +6,7 @@
 using namespace std;
 
 
-main() {
+int main() {
 
 IndexadorHash b("./StopWordsEspanyol.txt", ". ,:", false, false, "./indicePrueba", 0, false);
 
