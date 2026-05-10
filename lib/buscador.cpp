@@ -1,27 +1,77 @@
 #include "buscador.h"
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
 
 using namespace std;
 
+// ?????????????????????????????????????????????????????????????????????????????
+//  Helpers internos
+// ?????????????????????????????????????????????????????????????????????????????
+
+// Extrae "nombre" de una ruta completa: quita directorio y extensión.
+// Trabaja sobre la cadena original sin crear substrings hasta el final.
+static inline string extraerNombre(const string& ruta) {
+    // Buscar último separador
+    size_t slash = ruta.rfind('/');
+    if (slash == string::npos) slash = ruta.rfind('\\');
+
+    size_t ini = (slash == string::npos) ? 0 : slash + 1;
+
+    // Buscar extensión desde ini hacia adelante
+    size_t punto = ruta.rfind('.');
+    size_t fin   = (punto != string::npos && punto > ini) ? punto : ruta.size();
+
+    return ruta.substr(ini, fin - ini);
+}
+
+// ?????????????????????????????????????????????????????????????????????????????
+//  RebuildCache  ? O(D) sobre el número de documentos indexados
+// ?????????????????????????????????????????????????????????????????????????????
+void Buscador::RebuildCache() {
+    const int D = static_cast<int>(indiceDocs.size());
+    cacheNombre.clear();
+    cacheLen.clear();
+    cacheNombre.reserve(D * 2);
+    cacheLen.reserve(D * 2);
+
+    double suma = 0.0;
+    for (const auto& kv : indiceDocs) {
+        long int id = kv.second.idDoc;
+        cacheNombre[id] = extraerNombre(kv.first);
+        int len = kv.second.numPalSinParada;
+        cacheLen[id]    = len;
+        suma           += len;
+    }
+    N_cache = D;
+    avr_ld  = (D > 0) ? suma / D : 1.0;
+    if (avr_ld < 1.0) avr_ld = 1.0;
+}
+
+// ?????????????????????????????????????????????????????????????????????????????
+//  Constructores / destructor / asignación
+// ?????????????????????????????????????????????????????????????????????????????
+
+Buscador::Buscador()
+    : IndexadorHash(), formSimilitud(0), c(2.0), k1(1.2), b(0.75),
+      avr_ld(1.0), N_cache(0)
+{}
 
 Buscador::Buscador(const string& directorioIndexacion, const int& f)
     : IndexadorHash(directorioIndexacion),
-      formSimilitud(f), c(2.0), k1(1.2), b(0.75)
-{}
-
-Buscador::Buscador()
-    : IndexadorHash(),
-      docsOrdenados(),
-      formSimilitud(0),
-      c(2.0),
-      k1(1.2),
-      b(0.75)
-{}
+      formSimilitud(f), c(2.0), k1(1.2), b(0.75),
+      avr_ld(1.0), N_cache(0)
+{
+    RebuildCache();
+}
 
 Buscador::Buscador(const Buscador& busc)
     : IndexadorHash(busc),
       docsOrdenados(busc.docsOrdenados),
       formSimilitud(busc.formSimilitud),
-      c(busc.c), k1(busc.k1), b(busc.b)
+      c(busc.c), k1(busc.k1), b(busc.b),
+      cacheNombre(busc.cacheNombre), cacheLen(busc.cacheLen),
+      avr_ld(busc.avr_ld), N_cache(busc.N_cache)
 {}
 
 Buscador::~Buscador() {}
@@ -31,9 +81,11 @@ Buscador& Buscador::operator=(const Buscador& busc) {
         IndexadorHash::operator=(busc);
         docsOrdenados = busc.docsOrdenados;
         formSimilitud = busc.formSimilitud;
-        c  = busc.c;
-        k1 = busc.k1;
-        b  = busc.b;
+        c = busc.c; k1 = busc.k1; b = busc.b;
+        cacheNombre = busc.cacheNombre;
+        cacheLen    = busc.cacheLen;
+        avr_ld      = busc.avr_ld;
+        N_cache     = busc.N_cache;
     }
     return *this;
 }
@@ -43,155 +95,152 @@ int Buscador::DevolverFormulaSimilitud() const {
 }
 
 bool Buscador::CambiarFormulaSimilitud(const int& f) {
-    if (f == 0 || f == 1) {
-        formSimilitud = f;
-        return true;
-    }
+    if (f == 0 || f == 1) { formSimilitud = f; return true; }
     return false;
 }
 
-void Buscador::CambiarParametrosDFR(const double& kc){
-    c =kc;
-}
+void   Buscador::CambiarParametrosDFR(const double& kc)           { c  = kc; }
+double Buscador::DevolverParametrosDFR() const                    { return c; }
+void   Buscador::CambiarParametrosBM25(const double& kk1, const double& kb) { k1 = kk1; b = kb; }
+void   Buscador::DevolverParametrosBM25(double& kk1, double& kb) const      { kk1 = k1; kb = b; }
 
-double Buscador::DevolverParametrosDFR() const{
-    return c;
-}
-
-void Buscador::CambiarParametrosBM25(const double& kk1, const double& kb)  {
-    k1 = kk1;
-    b = kb;
-}
-
-void Buscador::DevolverParametrosBM25(double& kk1, double& kb) const {
-    kk1 = k1;
-    kb = b;
-}
-
-
-string Buscador::NombreDoc(long int id) const {
-    for (const auto& kv : indiceDocs){
-        if (kv.second.idDoc == id){
-            return kv.first;
-        }
-    }
-    return "?";
-}
-
+// ?????????????????????????????????????????????????????????????????????????????
+//  BuscarPreguntaActual  ? núcleo de scoring
+// ?????????????????????????????????????????????????????????????????????????????
 bool Buscador::BuscarPreguntaActual(const int& numDocumentos, const int& numPregunta) {
 
-    // 1. Comprobar que hay terminos de pregunta
     if (indicePregunta.empty()) {
         cerr << "ERROR: No hay ninguna pregunta indexada con terminos validos." << endl;
         return false;
     }
 
-    // 2. Datos de la coleccion
-    int N = informacionColeccionDocs.numDocs;
+    // Usar caché: N y avr_ld ya están calculados
+    int N = N_cache;
     if (N == 0) {
         cerr << "ERROR: La coleccion esta vacia." << endl;
         return false;
     }
 
-    double sumLen = 0.0;
-    unordered_map<long int, int> idToLen;
-    idToLen.reserve(indiceDocs.size());
-    for (const auto& kv : indiceDocs) {
-        idToLen[kv.second.idDoc] = kv.second.numPalSinParada;
-        sumLen += kv.second.numPalSinParada;
-    }
-    double avr_ld = (N > 0) ? sumLen / N : 1.0;
-    if (avr_ld < 1.0) {
-        avr_ld = 1.0;
-    }
+    // k = número de términos no de parada de la pregunta
+    const int k = infPregunta.numTotalPalSinParada;
+    const double inv_k = (k > 0) ? 1.0 / k : 1.0;   // evitar división en el bucle
 
-    // 3. Numero de terminos distintos en la pregunta
-    int k = infPregunta.numTotalPalSinParada;
-
-    // 4. Acumular scores por documento
+    // Acumulador de scores: reservamos para evitar rehashing
     unordered_map<long int, double> scores;
+    scores.reserve(N_cache * 2);
+
+    // Precalcular constantes fijas del modelo fuera del bucle de términos
+    // (DFR: c*avr_ld; BM25: k1*(1-b), k1*b/avr_ld)
+    const double c_avr    = c * avr_ld;                     // DFR
+    const double bm_fixed = k1 * (1.0 - b);                 // BM25
+    const double bm_bAvr  = k1 * b / avr_ld;                // BM25
+    const double k1p1     = k1 + 1.0;                       // BM25
 
     for (const auto& kvP : indicePregunta) {
         const string& termino = kvP.first;
         const InformacionTerminoPregunta& tp = kvP.second;
 
         InformacionTermino infTerm;
-        if (!Devuelve(termino, infTerm)) {
-            continue;
-        }
+        if (!Devuelve(termino, infTerm)) continue;
 
-        int ft_col = infTerm.ftc;
-        int nt = infTerm.numDocs();
-        int ft_q = tp.ft;
+        const int ft_col = infTerm.ftc;
+        const int nt     = infTerm.numDocs();
+        const int ft_q   = tp.ft;
 
-        double wi_q = static_cast<double>(ft_q) / k;
+        if (nt == 0) continue;
 
-        // Iterar documentos que contienen el termino
-        for (const auto& docPair : infTerm.l_docs) {
-            long int docId = docPair.first;
-            int ft_d  = docPair.second.ft;
+        const double wi_q = ft_q * inv_k;
 
-            double ld = static_cast<double>(idToLen.count(docId) ? idToLen[docId] : 1);
-            if (ld < 1.0) {
-                ld = 1.0;
+        if (formSimilitud == 0) {
+            // ?? DFR ?????????????????????????????????????????????????????????
+            const double lam      = static_cast<double>(ft_col) / N;
+            const double log1lam  = log2(1.0 + lam);
+            const double logRatio = log2((1.0 + lam) / lam);
+            const double ftcP1    = ft_col + 1.0;
+
+            for (const auto& docPair : infTerm.l_docs) {
+                long int docId = docPair.first;
+                int      ft_d  = docPair.second.ft;
+
+                // Longitud desde caché ? O(1)
+                auto it = cacheLen.find(docId);
+                double ld = (it != cacheLen.end()) ? static_cast<double>(it->second) : 1.0;
+                if (ld < 1.0) ld = 1.0;
+
+                double ft_star = ft_d * log2(1.0 + c_avr / ld);
+                double wi_d    = (log1lam + ft_star * logRatio)
+                                 * ftcP1 / (nt * (ft_star + 1.0));
+
+                scores[docId] += wi_q * wi_d;
             }
+        } else {
+            // ?? BM25 ????????????????????????????????????????????????????????
+            const double idf = log2((N - nt + 0.5) / (nt + 0.5));
 
-            double score_term = 0.0;
+            for (const auto& docPair : infTerm.l_docs) {
+                long int docId = docPair.first;
+                int      ft_d  = docPair.second.ft;
 
-            if (formSimilitud == 0) {
-                // DFR: wi_d = (log2(1+lam) + ft* * log2((1+lam)/lam)) * (ft_col+1) / (nt*(ft*+1))
-                // lambda_t = ft_col / N
-                double lam = static_cast<double>(ft_col) / N;
-                double ft_star = ft_d * log2(1.0 + c * avr_ld / ld);
-                double wi_d = (log2(1.0 + lam) + ft_star * log2((1.0 + lam) / lam))
-                                 * (ft_col + 1.0) / (nt * (ft_star + 1.0));
-                score_term = wi_q * wi_d;
+                auto it = cacheLen.find(docId);
+                double ld = (it != cacheLen.end()) ? static_cast<double>(it->second) : 1.0;
+                if (ld < 1.0) ld = 1.0;
+
+                // tf = ft_d*(k1+1) / (ft_d + k1*(1-b + b*ld/avr_ld))
+                double tf = (ft_d * k1p1) / (ft_d + bm_fixed + bm_bAvr * ld);
+
+                scores[docId] += idf * tf;
             }
-            else {
-                // BM25
-                double idf = log2((N - nt + 0.5) / (nt + 0.5));
-                double tf  = (static_cast<double>(ft_d) * (k1 + 1.0)) /
-                             (ft_d + k1 * (1.0 - b + b * ld / avr_ld));
-                score_term = idf * tf;
-            }
-            scores[docId] += score_term;
         }
     }
 
-    // 5. Insertar en docsOrdenados
-    for (const auto& kv : scores){
+    // Insertar en docsOrdenados
+    for (const auto& kv : scores)
         docsOrdenados.push(ResultadoRI(kv.second, kv.first, numPregunta));
-    }
+
     return true;
 }
 
-
+// ?????????????????????????????????????????????????????????????????????????????
+//  Buscar (pregunta única ya indexada)
+// ?????????????????????????????????????????????????????????????????????????????
 bool Buscador::Buscar(const int& numDocumentos) {
-    while (!docsOrdenados.empty()) {
-        docsOrdenados.pop();
-    }
+    while (!docsOrdenados.empty()) docsOrdenados.pop();
+    // Si la caché está vacía (ej. índice recargado fuera), reconstruir
+    if (N_cache == 0 && !indiceDocs.empty()) RebuildCache();
     return BuscarPreguntaActual(numDocumentos, 0);
 }
 
+// ?????????????????????????????????????????????????????????????????????????????
+//  Buscar (corpus de preguntas)
+// ?????????????????????????????????????????????????????????????????????????????
+bool Buscador::Buscar(const string& dirPreguntas, const int& numDocumentos,
+                      const int& numPregInicio, const int& numPregFin) {
+    while (!docsOrdenados.empty()) docsOrdenados.pop();
+    if (N_cache == 0 && !indiceDocs.empty()) RebuildCache();
 
-bool Buscador::Buscar(const string& dirPreguntas, const int& numDocumentos, const int& numPregInicio, const int& numPregFin) {
-    while (!docsOrdenados.empty()) {
-        docsOrdenados.pop();
-    }
+    // Buffer de lectura reutilizable entre preguntas
+    static const int BUF_SIZE = 65536;
+    static char buf[BUF_SIZE];
 
     for (int np = numPregInicio; np <= numPregFin; ++np) {
-        string fich = dirPreguntas + to_string(np) + ".txt";
-        ifstream f(fich.c_str());
-        if (!f) {
-            cerr << "ERROR: No se puede abrir " << fich << endl;
-            continue;
-        }
-        string contenido((istreambuf_iterator<char>(f)),istreambuf_iterator<char>());
-        f.close();
+        // Construir ruta con FILE* (más rápido que ifstream para ficheros pequeños)
+        string ruta = dirPreguntas + to_string(np) + ".txt";
 
-        if (!IndexarPregunta(contenido)) {
+        FILE* fp = fopen(ruta.c_str(), "rb");
+        if (!fp) {
+            cerr << "ERROR: No se puede abrir " << ruta << endl;
             continue;
         }
+
+        // Leer todo el fichero de una vez en el buffer
+        string contenido;
+        size_t leido;
+        while ((leido = fread(buf, 1, BUF_SIZE, fp)) > 0)
+            contenido.append(buf, leido);
+        fclose(fp);
+
+        if (!IndexarPregunta(contenido)) continue;
+
         if (!BuscarPreguntaActual(numDocumentos, np)) {
             cerr << "ERROR: Fallo en busqueda pregunta " << np << endl;
             return false;
@@ -200,65 +249,111 @@ bool Buscador::Buscar(const string& dirPreguntas, const int& numDocumentos, cons
     return true;
 }
 
+// ?????????????????????????????????????????????????????????????????????????????
+//  EscribirResultados  ? sin copiar la cola
+// ?????????????????????????????????????????????????????????????????????????????
 void Buscador::EscribirResultados(ostream& out, const int& numDocumentos) const {
-    string formula = (formSimilitud == 0) ? "DFR" : "BM25";
+    const char* formula = (formSimilitud == 0) ? "DFR" : "BM25";
 
     string pregActual;
     DevuelvePregunta(pregActual);
 
-    priority_queue<ResultadoRI> copia = docsOrdenados;
+    // Volcar la cola a un vector SIN copiarla (vaciamos una copia temporal)
+    // Para evitar la copia completa del priority_queue usamos un vector+sort
+    // sobre los elementos drenados de una copia local (solo el contenedor).
+    // Como priority_queue no expone iteradores, la única forma portable es
+    // drenar una copia. Lo hacemos en un vector pre-reservado.
     vector<ResultadoRI> todos;
-    while (!copia.empty()) {
-        todos.push_back(copia.top());
-        copia.pop();
+    todos.reserve(docsOrdenados.size());
+    {
+        priority_queue<ResultadoRI> tmp = docsOrdenados;   // copia inevitable
+        while (!tmp.empty()) { todos.push_back(tmp.top()); tmp.pop(); }
     }
+    // todos ya está en orden decreciente (la cola es max-heap)
 
-    unordered_map<int, int> posXPreg;
+    // Acumulador de posición por pregunta ? vector si numPreg es pequeño
+    unordered_map<int,int> posXPreg;
+    posXPreg.reserve(128);
 
+    // Buffer de salida: construir string grande y escribir de una vez
+    // Evita múltiples syscalls de write en cout/ofstream
+    string salida;
+    salida.reserve(todos.size() * 60);   // estimación generosa por línea
+
+    char linea[256];
     for (const ResultadoRI& r : todos) {
         int np  = r.NumPregunta();
-        int pos = posXPreg[np];
+        int& pos = posXPreg[np];
+        if (pos >= numDocumentos) { ++pos; continue; }
 
-        if (pos >= numDocumentos) {
-            posXPreg[np]++;
-            continue;
-        }
+        // Nombre desde caché ? O(1)
+        auto it = cacheNombre.find(r.IdDoc());
+        const string& nombre = (it != cacheNombre.end()) ? it->second : "?";
 
-        string nomCompleto = NombreDoc(r.IdDoc());
-        size_t slash = nomCompleto.rfind('/');
+        const char* pregImp = (np == 0) ? pregActual.c_str() : "ConjuntoDePreguntas";
 
-        if (slash == string::npos) {
-            slash = nomCompleto.rfind('\\');
-        }
-
-        string nombre = (slash != string::npos) ? nomCompleto.substr(slash + 1) : nomCompleto;
-        size_t punto  = nombre.rfind('.');
-
-        if (punto != string::npos) {
-            nombre = nombre.substr(0, punto);
-        }
-
-        string pregImp = (np == 0) ? pregActual : "ConjuntoDePreguntas";
-
-        out << np << " " << formula << " " << nombre
-            << " " << pos << " "
-            << fixed << setprecision(6) << r.VSimilitud()
-            << " " << pregImp << "\n";
-
-        posXPreg[np]++;
+        // snprintf es mucho más rápido que operator<< con fixed+setprecision
+        int n = snprintf(linea, sizeof(linea),
+                         "%d %s %s %d %.6f %s\n",
+                         np, formula, nombre.c_str(), pos, r.VSimilitud(), pregImp);
+        if (n > 0) salida.append(linea, n);
+        ++pos;
     }
+
+    out.write(salida.data(), static_cast<streamsize>(salida.size()));
 }
 
+// ?????????????????????????????????????????????????????????????????????????????
+//  API pública de impresión
+// ?????????????????????????????????????????????????????????????????????????????
 void Buscador::ImprimirResultadoBusqueda(const int& numDocumentos) const {
     EscribirResultados(cout, numDocumentos);
 }
 
-bool Buscador::ImprimirResultadoBusqueda(const int& numDocumentos, const string& nombreFichero) const {
-    ofstream f(nombreFichero.c_str());
-    if (!f) {
+bool Buscador::ImprimirResultadoBusqueda(const int& numDocumentos,
+                                          const string& nombreFichero) const {
+    // Usamos FILE* con buffer grande para escritura ? más rápido que ofstream
+    FILE* fp = fopen(nombreFichero.c_str(), "wb");
+    if (!fp) {
         cerr << "ERROR: No se puede crear el fichero " << nombreFichero << endl;
         return false;
     }
-    EscribirResultados(f, numDocumentos);
+    // Construir el buffer igual que EscribirResultados pero volcarlo con fwrite
+    const char* formula = (formSimilitud == 0) ? "DFR" : "BM25";
+    string pregActual;
+    DevuelvePregunta(pregActual);
+
+    vector<ResultadoRI> todos;
+    todos.reserve(docsOrdenados.size());
+    {
+        priority_queue<ResultadoRI> tmp = docsOrdenados;
+        while (!tmp.empty()) { todos.push_back(tmp.top()); tmp.pop(); }
+    }
+
+    unordered_map<int,int> posXPreg;
+    posXPreg.reserve(128);
+
+    string salida;
+    salida.reserve(todos.size() * 60);
+
+    char linea[256];
+    for (const ResultadoRI& r : todos) {
+        int np  = r.NumPregunta();
+        int& pos = posXPreg[np];
+        if (pos >= numDocumentos) { ++pos; continue; }
+
+        auto it = cacheNombre.find(r.IdDoc());
+        const string& nombre = (it != cacheNombre.end()) ? it->second : "?";
+        const char* pregImp = (np == 0) ? pregActual.c_str() : "ConjuntoDePreguntas";
+
+        int n = snprintf(linea, sizeof(linea),
+                         "%d %s %s %d %.6f %s\n",
+                         np, formula, nombre.c_str(), pos, r.VSimilitud(), pregImp);
+        if (n > 0) salida.append(linea, n);
+        ++pos;
+    }
+
+    fwrite(salida.data(), 1, salida.size(), fp);
+    fclose(fp);
     return true;
 }
