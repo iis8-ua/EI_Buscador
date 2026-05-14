@@ -3,13 +3,12 @@
 
 #include <iostream>
 #include <string>
-#include <queue>
 #include <vector>
 #include <fstream>
-#include <sstream>
 #include <iomanip>
 #include <cmath>
 #include <unordered_map>
+#include <algorithm>
 #include "indexadorHash.h"
 
 using namespace std;
@@ -79,7 +78,11 @@ private:
     Buscador();
 
     // ?? resultados ??????????????????????????????????????????????????????????
-    priority_queue<ResultadoRI> docsOrdenados;
+    // Vector en lugar de priority_queue: acumulamos todos los resultados de
+    // todas las preguntas y ordenamos una sola vez en ImprimirResultadoBusqueda.
+    // Con 83 preguntas × 423 docs = ~35.000 elementos, un sort final es más
+    // rápido que 35.000 push al heap con sus rebalanceos.
+    vector<ResultadoRI> docsOrdenados;
 
     // ?? parámetros de similitud ??????????????????????????????????????????????
     int    formSimilitud;   // 0: DFR, 1: BM25
@@ -87,17 +90,28 @@ private:
     double k1, b;           // BM25
 
     // ?? CACHÉ precalculada (se llena en RebuildCache) ????????????????????????
-    // idDoc ? nombre de fichero sin directorio ni extensión
-    unordered_map<long int, string> cacheNombre;
-    // idDoc ? numPalSinParada
-    unordered_map<long int, int>    cacheLen;
+    // Los idDoc son enteros 1..N, por lo que usamos vectores indexados
+    // directamente: acceso O(1) sin hashing, datos contiguos en memoria ? L1.
+
+    // idDoc (1-based) ? nombre sin ruta ni extensión.  índice 0 no se usa.
+    vector<string> cacheNombre;   // tamaño N+1
+
+    // idDoc (1-based) ? numPalSinParada (como double para evitar cast en scoring)
+    vector<double> cacheLen;      // tamaño N+1
+
     // media de longitudes (palabras sin parada)
     double avr_ld;
-    // número de docs (igual que informacionColeccionDocs.numDocs, pero cacheado)
+    // número de docs
     int    N_cache;
 
-    // Construye/reconstruye los tres mapas de caché a partir de indiceDocs.
-    // Se llama tras cargar la indexación y cada vez que pueda haber cambiado.
+    // Acumulador de scores por documento en BuscarPreguntaActual.
+    // vector<double> de tamaño N+1, indexado por idDoc directamente.
+    // Se reutiliza entre llamadas: se resetea solo en las posiciones tocadas.
+    vector<double>   scoresBuf;   // tamaño N+1, valores inicializados a 0
+    vector<bool>     docMarcado;  // tamaño N+1, valores inicializados a false
+    vector<long int> docsActivos; // lista de idDocs con score != 0 en la pasada actual
+
+    // Construye la caché a partir de indiceDocs. Se llama una sola vez al cargar.
     void RebuildCache();
 
     // Núcleo de búsqueda para la pregunta ya indexada
