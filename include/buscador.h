@@ -7,11 +7,15 @@
 #include <fstream>
 #include <iomanip>
 #include <cmath>
-#include <unordered_map>
 #include <algorithm>
 #include "indexadorHash.h"
 
 using namespace std;
+
+// log2(x) = log(x) * M_LOG2E ? en la mayoría de libm log() usa ln nativo
+// del FPU y es igual o más rápido que log2(). Función inline: el compilador
+// la elimina completamente igual que haría con una macro, sin indirección.
+static inline double mylog2(double x) { return log(x) * M_LOG2E; }
 
 class ResultadoRI {
     friend ostream& operator<<(ostream& os, const ResultadoRI& res) {
@@ -22,9 +26,9 @@ public:
     ResultadoRI(const double& kvSimilitud, const long int& kidDoc, const int& np)
         : vSimilitud(kvSimilitud), idDoc(kidDoc), numPregunta(np) {}
 
-    double VSimilitud() const { return vSimilitud; }
-    long int IdDoc()    const { return idDoc; }
-    int NumPregunta()   const { return numPregunta; }
+    double   VSimilitud() const { return vSimilitud; }
+    long int IdDoc()      const { return idDoc; }
+    int      NumPregunta()const { return numPregunta; }
 
     bool operator<(const ResultadoRI& lhs) const {
         if (numPregunta == lhs.numPregunta)
@@ -62,8 +66,10 @@ public:
     bool Buscar(const string& dirPreguntas, const int& numDocumentos,
                 const int& numPregInicio, const int& numPregFin);
 
-    void ImprimirResultadoBusqueda(const int& numDocumentos = 99999) const;
-    bool ImprimirResultadoBusqueda(const int& numDocumentos, const string& nombreFichero) const;
+    // Quitamos const: el método ordena docsOrdenados in-place antes de imprimir
+    // para evitar la copia de ~840 KB que hacía la versión anterior.
+    void ImprimirResultadoBusqueda(const int& numDocumentos = 99999);
+    bool ImprimirResultadoBusqueda(const int& numDocumentos, const string& nombreFichero);
 
     int  DevolverFormulaSimilitud() const;
     bool CambiarFormulaSimilitud(const int& f);
@@ -77,48 +83,35 @@ public:
 private:
     Buscador();
 
-    // ?? resultados ??????????????????????????????????????????????????????????
-    // Vector en lugar de priority_queue: acumulamos todos los resultados de
-    // todas las preguntas y ordenamos una sola vez en ImprimirResultadoBusqueda.
-    // Con 83 preguntas × 423 docs = ~35.000 elementos, un sort final es más
-    // rápido que 35.000 push al heap con sus rebalanceos.
+    // Resultados: vector desordenado durante la búsqueda, ordenado in-place
+    // antes de imprimir. Evita la copia de 35.000 × 24 bytes en cada impresión.
     vector<ResultadoRI> docsOrdenados;
+    bool                docsOrdenadosYaSorted; // flag: evita re-sort innecesario
 
-    // ?? parámetros de similitud ??????????????????????????????????????????????
+    // Parámetros de similitud
     int    formSimilitud;   // 0: DFR, 1: BM25
     double c;               // DFR
     double k1, b;           // BM25
 
-    // ?? CACHÉ precalculada (se llena en RebuildCache) ????????????????????????
-    // Los idDoc son enteros 1..N, por lo que usamos vectores indexados
-    // directamente: acceso O(1) sin hashing, datos contiguos en memoria ? L1.
+    // Caché precalculada una sola vez en RebuildCache().
+    // Vectores indexados directamente por idDoc (1-based): O(1) sin hashing,
+    // datos contiguos ? todo en caché L1 con 423 docs (~7 KB total).
+    vector<string>   cacheNombre;   // idDoc ? nombre sin ruta ni extensión
+    vector<double>   cacheLen;      // idDoc ? numPalSinParada (ya como double)
+    double           avr_ld;
+    int              N_cache;
 
-    // idDoc (1-based) ? nombre sin ruta ni extensión.  índice 0 no se usa.
-    vector<string> cacheNombre;   // tamaño N+1
+    // Buffers de scoring reutilizados entre llamadas a BuscarPreguntaActual.
+    // Reset selectivo: solo se limpian las posiciones tocadas (docsActivos).
+    vector<double>   scoresBuf;     // tamaño N+1, indexado por idDoc
+    vector<bool>     docMarcado;    // tamaño N+1, marca qué docs tienen score
+    vector<long int> docsActivos;   // idDocs tocados en la pasada actual
 
-    // idDoc (1-based) ? numPalSinParada (como double para evitar cast en scoring)
-    vector<double> cacheLen;      // tamaño N+1
-
-    // media de longitudes (palabras sin parada)
-    double avr_ld;
-    // número de docs
-    int    N_cache;
-
-    // Acumulador de scores por documento en BuscarPreguntaActual.
-    // vector<double> de tamaño N+1, indexado por idDoc directamente.
-    // Se reutiliza entre llamadas: se resetea solo en las posiciones tocadas.
-    vector<double>   scoresBuf;   // tamaño N+1, valores inicializados a 0
-    vector<bool>     docMarcado;  // tamaño N+1, valores inicializados a false
-    vector<long int> docsActivos; // lista de idDocs con score != 0 en la pasada actual
-
-    // Construye la caché a partir de indiceDocs. Se llama una sola vez al cargar.
     void RebuildCache();
-
-    // Núcleo de búsqueda para la pregunta ya indexada
+    // Ordena docsOrdenados in-place (llamado al final de Buscar y antes de imprimir)
+    void SortResultados();
     bool BuscarPreguntaActual(const int& numDocumentos, const int& numPregunta);
-
-    // Escribe resultados en un stream de salida
-    void EscribirResultados(ostream& out, const int& numDocumentos) const;
+    void EscribirResultados(ostream& out, const int& numDocumentos);
 };
 
 #endif
