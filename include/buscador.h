@@ -103,9 +103,15 @@ private:
 
     // Buffers de scoring reutilizados entre llamadas a BuscarPreguntaActual.
     // Reset selectivo: solo se limpian las posiciones tocadas (docsActivos).
-    vector<double>   scoresBuf;     // tamaño N+1, indexado por idDoc
-    vector<bool>     docMarcado;    // tamaño N+1, marca qué docs tienen score
-    vector<long int> docsActivos;   // idDocs tocados en la pasada actual
+    vector<double>   scoresBuf;       // tamaño N+1, indexado por idDoc
+    vector<bool>     docMarcado;      // tamaño N+1, marca qué docs tienen score
+    vector<long int> docsActivos;     // idDocs tocados en la pasada actual
+
+    // Tabla precalculada para DFR: cacheDFRlog[id] = log(1 + c*avr_ld / ld[id])
+    // Solo depende de c y de la longitud del doc, ambas constantes entre preguntas.
+    // Se recalcula si cambia c (CambiarParametrosDFR).
+    vector<double>   cacheDFRlog;     // tamaño N+1, indexado por idDoc
+    void RebuildDFRlog();             // reconstruye cacheDFRlog con el c actual
 
     void RebuildCache();
     // Ordena docsOrdenados in-place (llamado al final de Buscar y antes de imprimir)

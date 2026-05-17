@@ -42,6 +42,24 @@ void Buscador::RebuildCache() {
     }
     avr_ld = (D > 0) ? suma / D : 1.0;
     if (avr_ld < 1.0) avr_ld = 1.0;
+    RebuildDFRlog();
+}
+
+// ?????????????????????????????????????????????????????????????????????????????
+//  RebuildDFRlog ? precalcula log(1 + c*avr_ld / ld[id]) para cada documento
+//
+//  En DFR, ft_star = ft_d * log(1 + c*avr_ld / ld). El factor log(1+c*avr_ld/ld)
+//  depende únicamente de c (constante del modelo) y de ld (longitud del doc,
+//  fija en el índice). Entre preguntas ninguno de los dos cambia, así que se
+//  puede precalcular una vez y reutilizarlo en todas las búsquedas.
+//  Se llama desde RebuildCache() y desde CambiarParametrosDFR().
+// ?????????????????????????????????????????????????????????????????????????????
+void Buscador::RebuildDFRlog() {
+    const int D    = N_cache;
+    const double ca = c * avr_ld;
+    cacheDFRlog.resize(D + 1, 0.0);
+    for (int id = 1; id <= D; ++id)
+        cacheDFRlog[id] = mylog2(1.0 + ca / cacheLen[id]);
 }
 
 // ?????????????????????????????????????????????????????????????????????????????
@@ -85,7 +103,7 @@ Buscador::Buscador(const Buscador& busc)
       cacheNombre(busc.cacheNombre), cacheLen(busc.cacheLen),
       avr_ld(busc.avr_ld), N_cache(busc.N_cache),
       scoresBuf(busc.scoresBuf), docMarcado(busc.docMarcado),
-      docsActivos(busc.docsActivos)
+      docsActivos(busc.docsActivos), cacheDFRlog(busc.cacheDFRlog)
 {}
 
 Buscador::~Buscador() {}
@@ -104,6 +122,7 @@ Buscador& Buscador::operator=(const Buscador& busc) {
         scoresBuf    = busc.scoresBuf;
         docMarcado   = busc.docMarcado;
         docsActivos  = busc.docsActivos;
+        cacheDFRlog  = busc.cacheDFRlog;
     }
     return *this;
 }
@@ -118,7 +137,10 @@ bool Buscador::CambiarFormulaSimilitud(const int& f) {
     return false;
 }
 
-void   Buscador::CambiarParametrosDFR(const double& kc)                     { c  = kc; }
+void   Buscador::CambiarParametrosDFR(const double& kc) {
+    c = kc;
+    if (N_cache > 0) RebuildDFRlog();   // recalcular tabla con nuevo c
+}
 double Buscador::DevolverParametrosDFR() const                               { return c; }
 void   Buscador::CambiarParametrosBM25(const double& kk1, const double& kb) { k1 = kk1; b = kb; }
 void   Buscador::DevolverParametrosBM25(double& kk1, double& kb) const      { kk1 = k1; kb = b; }
@@ -155,7 +177,6 @@ bool Buscador::BuscarPreguntaActual(const int& numDocumentos, const int& numPreg
     docsActivos.clear();
 
     // Constantes globales del modelo ? calculadas una sola vez fuera de todo bucle
-    const double c_avr    = c * avr_ld;
     const double bm_fixed = k1 * (1.0 - b);
     const double bm_bAvr  = k1 * b / avr_ld;
     const double k1p1     = k1 + 1.0;
@@ -191,7 +212,8 @@ bool Buscador::BuscarPreguntaActual(const int& numDocumentos, const int& numPreg
                 const int    ft_d  = docPair.second.ft;
                 const double ld    = cacheLen[docId]; // vector O(1), ya double, ya >= 1
 
-                const double ft_star = ft_d * mylog2(1.0 + c_avr / ld);
+                // cacheDFRlog[docId] = log2(1 + c*avr_ld/ld) precalculado
+                const double ft_star = ft_d * cacheDFRlog[docId];
                 const double wi_d    = (log1lam + ft_star * logRatio)
                                        * ftcP1 / (ntD * (ft_star + 1.0));
 
@@ -307,26 +329,38 @@ void Buscador::EscribirResultados(ostream& out, const int& numDocumentos) {
     string pregActual;
     DevuelvePregunta(pregActual);
 
-    // Vector de posición indexado por numPregunta (0..83): más rápido que mapa
+    // Precalcular puntero a "ConjuntoDePreguntas" una sola vez
+    static const char* const conjStr = "ConjuntoDePreguntas";
+
+    // Vector de posición indexado por numPregunta (0..83)
     vector<int> posXPreg(85, 0);
 
-    // Buffer de salida acumulado ? un único write al final (mínimas syscalls)
+    // Tamaño estimado: 35109 líneas × ~55 chars = ~1.9 MB
+    // reserve exacto evita realojaciones del string de salida
+    const size_t nRes = docsOrdenados.size();
     string salida;
-    salida.reserve(docsOrdenados.size() * 60);
+    salida.reserve(nRes * 55);
 
-    char linea[256];
-    for (const ResultadoRI& r : docsOrdenados) {   // itera directamente, sin copia
+    // Buffer de línea en pila ? 128 bytes suficientes para el formato
+    char linea[128];
+
+    // Puntero al buffer interno de pregActual: evita .c_str() en cada iteración
+    const char* const pregPtr  = pregActual.c_str();
+    const char* const fmlaPtr  = formula;
+
+    for (const ResultadoRI& r : docsOrdenados) {
         const int np  = r.NumPregunta();
         int& pos = posXPreg[np < 85 ? np : 0];
         if (pos >= numDocumentos) { ++pos; continue; }
 
-        const string& nombre = (r.IdDoc() >= 1 && r.IdDoc() <= N_cache)
-                               ? cacheNombre[r.IdDoc()] : "?";
-        const char* pregImp  = (np == 0) ? pregActual.c_str() : "ConjuntoDePreguntas";
+        // Lookup O(1) en vector: ya es una referencia, sin copia
+        const char* nomPtr = (r.IdDoc() >= 1 && r.IdDoc() <= N_cache)
+                             ? cacheNombre[r.IdDoc()].c_str() : "?";
+        const char* pregImp = (np == 0) ? pregPtr : conjStr;
 
         int n = snprintf(linea, sizeof(linea),
                          "%d %s %s %d %.6f %s\n",
-                         np, formula, nombre.c_str(), pos, r.VSimilitud(), pregImp);
+                         np, fmlaPtr, nomPtr, pos, r.VSimilitud(), pregImp);
         if (n > 0) salida.append(linea, static_cast<size_t>(n));
         ++pos;
     }
