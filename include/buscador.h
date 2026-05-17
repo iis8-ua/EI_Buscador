@@ -8,6 +8,8 @@
 #include <iomanip>
 #include <cmath>
 #include <algorithm>
+#include <cstdint>
+#include <queue>
 #include "indexadorHash.h"
 
 using namespace std;
@@ -96,7 +98,7 @@ private:
     double  avr_ld;
     int N_cache;
     vector<double> scoresBuf;
-    vector<bool> docMarcado;
+    vector<uint8_t> docMarcado;
     vector<long int> docsActivos;
     vector<double> cacheDFRlog;
 
