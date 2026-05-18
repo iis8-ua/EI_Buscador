@@ -1,54 +1,65 @@
 #include <iostream>
 #include <string>
-#include <list>
-#include <sys/resource.h>
-#include <ctime>
 #include "tokenizador.h"
 #include "indexadorHash.h"
 #include "buscador.h"
 
 using namespace std;
 
-double getcputime(void) {
-    struct timeval tim;
-    struct rusage ru;
-    getrusage(RUSAGE_SELF, &ru);
-    tim=ru.ru_utime;
-    double t=(double)tim.tv_sec + (double)tim.tv_usec / 1000000.0;
-    tim=ru.ru_stime;
-    t+=(double)tim.tv_sec + (double)tim.tv_usec / 1000000.0;
-    return t;
-}
-
 int main() {
-    IndexadorHash b("./StopWordsEspanyol.txt", ". ,:", false, false,
-    "./indicePruebaEspanyol", 0, false);
 
-    b.Indexar("ficherosTimes.txt");
-    b.GuardarIndexacion();
+    // === AJUSTA ESTAS RUTAS ===
+    string dirPreguntas  = "./CorpusTime/Preguntas/";
+    string ficherosTimes = "ficherosTimes.txt";
+    // ==========================
 
-    Buscador a("./indicePruebaEspanyol", 0);
-    a.IndexarPregunta("KENNEDY ADMINISTRATION PRESSURE ON NGO DINH DIEM TO STOP SUPPRESSING THE BUDDHISTS . ");
+    // --- 1. Sin stemming: indexar una sola vez ---
+    {
+        IndexadorHash idx("./StopWordsIngles.txt", "", true, true,
+                          "./indice_NoStem", 0, false);
+        idx.Indexar(ficherosTimes);
+        idx.GuardarIndexacion();
+    }
 
-    double aa=getcputime();
+    // --- 2. Con stemming (Porter inglés): indexar una sola vez ---
+    {
+        IndexadorHash idx("./StopWordsIngles.txt", "", true, true,
+                          "./indice_Stem", 2, false);
+        idx.Indexar(ficherosTimes);
+        idx.GuardarIndexacion();
+    }
 
-    a.Buscar(423);
-    a.ImprimirResultadoBusqueda(423);
+    // --- Combinación 1: DFR + Sin stemming ---
+    {
+        Buscador a("./indice_NoStem", 0);
+        a.Buscar(dirPreguntas, 423, 1, 83);
+        a.ImprimirResultadoBusqueda(423, "fich_salida_DFR_NoStem.txt");
+        cout << "OK: fich_salida_DFR_NoStem.txt" << endl;
+    }
 
-    double bb=getcputime()-aa;
-    cout << "\nHa tardado " << bb << " segundos\n\n";
+    // --- Combinación 2: BM25 + Sin stemming ---
+    {
+        Buscador a("./indice_NoStem", 1);
+        a.Buscar(dirPreguntas, 423, 1, 83);
+        a.ImprimirResultadoBusqueda(423, "fich_salida_BM25_NoStem.txt");
+        cout << "OK: fich_salida_BM25_NoStem.txt" << endl;
+    }
 
-    time_t inicioB, finB;
-    time(&inicioB);
+    // --- Combinación 3: DFR + Con stemming ---
+    {
+        Buscador a("./indice_Stem", 0);
+        a.Buscar(dirPreguntas, 423, 1, 83);
+        a.ImprimirResultadoBusqueda(423, "fich_salida_DFR_Stem.txt");
+        cout << "OK: fich_salida_DFR_Stem.txt" << endl;
+    }
 
-    double aaB=getcputime();
-
-    a.Buscar("/home/israelizqdo/Escritorio/3Carrera/EI/Buscador/CorpusTime/Preguntas/", 423, 1, 83);
-
-    a.ImprimirResultadoBusqueda(423);
-
-    double bbB=getcputime()-aaB;
-    cout << "\nHa tardado " << bbB << " segundos\n\n";
+    // --- Combinación 4: BM25 + Con stemming ---
+    {
+        Buscador a("./indice_Stem", 1);
+        a.Buscar(dirPreguntas, 423, 1, 83);
+        a.ImprimirResultadoBusqueda(423, "fich_salida_BM25_Stem.txt");
+        cout << "OK: fich_salida_BM25_Stem.txt" << endl;
+    }
 
     return 0;
 }

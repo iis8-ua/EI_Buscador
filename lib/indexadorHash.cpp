@@ -789,11 +789,11 @@ bool IndexadorHash::GuardarIndexacion() const {
 
     return true;
 }
-
 bool IndexadorHash::RecuperarIndexacion(const string& directorioIndexacion) {
     VaciarIndiceDocs();
     VaciarIndicePreg();
     stopWords.clear();
+    stopWordsFiltrado.clear();
 
     string dir;
     if (directorioIndexacion.empty()) {
@@ -827,10 +827,17 @@ bool IndexadorHash::RecuperarIndexacion(const string& directorioIndexacion) {
 
     int nSW; f >> nSW; f.ignore();
     stopWords.reserve(nSW * 2);
+    stopWordsFiltrado.reserve(nSW * 2);
+    stemmerPorter sp;
     for (int i = 0; i < nSW; i++) {
         string sw;
         getline(f, sw);
         stopWords.insert(sw);
+        string termino = sw;
+        if (tipoStemmer != 0) {
+            sp.stemmer(termino, tipoStemmer);
+        }
+        stopWordsFiltrado.insert(termino);
     }
 
     f >> informacionColeccionDocs.numDocs
